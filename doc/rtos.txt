@@ -1,0 +1,90 @@
+
+0 a 4 prioridades tasks
+
+headers
+	freertos
+	task
+	semaphore
+	queue
+	
+taskcreate, le paso la funcion handler, prioridad, stack
+
+los handlers son loops infinitos
+
+en el config defino cuantos niveles de prioridad tengo
+
+define heap size es toda la memoria que voy a estar usando
+	cada stack de cada task va ahi adentro -> la suma de estos no puede ser > que la heap size
+	
+funciones 	-> varaibles comunes van al stack de la task
+		-> variables static van al heap, al global
+		
+		
+freertos no chequea si pisas memoria, OJO CON LA MEMORIA ASIGNADA Y UTILIZADA!!!
+no tiene proteccion de memoria
+
+al return las tasks no llegan a menos que no habia suficiente heap para iniciar el scheduler
+
+WATERMARK
+
+OVERFLOWHOOK -> freertos llama a este cuando hay overflow
+
+gcc-arm-none-eabi -> para compilar
+
+qemu system arm
+	-machine help
+	stellaris es el emulador que queremos
+	
+-s shortcut para que me levante gdb en port 1234
+-S pone break en la primer instruccion
+qemu-system-arm -machine lm3s811evb -kernel gcc/RTOSdemo.axf -s -S
+						este seria el binario que genero yo
+sudo apt-get install gdb-multiarch 
+
+abro gdb multiarch y pongo target remote localhost:1234 para ver la ejecucion
+
+-------------------------------
+
+TP
+
+1) generar task simule sensor de temp generando vals aleatorios (con sentido) con f 10 hz
+vtaskdelay o algo de eso para la frecuencia
+
+2) task recibe vals del sensor y aplica filtro pasa bajos (ventana deslizante) donde cada valor resultante es el promedio de las ultimas n mediciones (ponele 10-15, siempre tengo los ultimos 10-15 y saco el promedio y devuelvo ese, c/ vez que tengo nueva medicion, descarto la ultima y hago promedio y asi) 
+ojo con el n variable -> puede ser un arreglo con n max, y otro dinamico para el n variable
+arreglo circular?
+
+3) task q grafique en display  los vals de temp en tiempo (una grafica)
+
+4) task q reciba comandos por uart para cambiar el n del filtro
+
+5) clacular stack necesario para c task, realizar analisis con hook o watermark
+
+6) implementar task tipo top de linux , q muestre periodicamente las stats  de tasks, imprime por el serial -> uso de mem, cpu	
+vtaskgetruntimestats: ver, pasar lo que te da a % de uso o algo asi
+watermark p uso de memoria 
+vtasklist: ver
+
+ver -serial que onda
+
+osramstringdraw dibuja caracteres, no sirve para curvas
+
+osramimagedraw -> p dibujarr puntos, me sirve
+
+el display tiene 2 renglones y 8*16 pixeles por renglon (o sea en total 16x16)
+c/ byte que le paso esta en forma vertical... ver la descripcion de las funcs de arribas
+creo que tengo 16 pixeles en vertical, donde le ponga un 1 se dibuja un punto (con imagedraw creo)
+voy a tener que mapear grados con el lugar donde dibujar el punto
+
+sincronizar las comunicaciones -> ver queues del rtosdemo
+xqueuecreate
+xqueue send -> p meter a la cola
+xqueue receive -> p sacar de la cola
+las 2 tienen los mismos args
+el ultimo arg me determina si es bloqueante, no bloqueante, o bloqueante un ratito -> si quiero sacar y no hay nada, si quiero poner y no hay lugar. 0 es no bloqueante, por ej 2000 se bloquea 2000 ticks intentando poner, si pasan sale y devuelve error, portMaxdelay es bloqueante forever (con esta no hace falta chequear return total no sale nunca a menos que pueda meter/sacar)
+chequear los ret values de send y receive cuando es no bloqueante/bloqueante un ratito
+
+preemptive por defecto el sistema -> que te puede sacar a una tarea para meter a otra que esta lista y se tiene que ejecutar, osea sacarla sin esperar a que se bloquee
+
+martin.alonso@unc.edu.ar
+
