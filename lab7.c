@@ -4,17 +4,21 @@
 #include "queue.h"
 #include "semphr.h"
 
+#include <stdlib.h>
+
 /* Delay para obtener la frecuencia de 10 hz del sensor */
-#define mainSENSOR_DELAY ( ( TickType_t ) 100 / portTICK_PERIOD_MS )
+#define mainSENSOR_DELAY 	( ( TickType_t ) 100 / portTICK_PERIOD_MS )
 
 /* UART configuration - note this does not use the FIFO so is not very
 efficient. */
-#define mainBAUD_RATE	( 19200 )
-#define mainFIFO_SET	( 0x10 )
+#define mainBAUD_RATE		( 19200 )
+#define mainFIFO_SET		( 0x10 )
 
-#define mainQUEUE_SIZE	( 50 )
+#define mainQUEUE_SIZE		( 50 )
 
-#define mainTASK_PRIORITY		( tskIDLE_PRIORITY + 3 )
+#define mainTASK_PRIORITY	( tskIDLE_PRIORITY + 3 )
+
+#define MAX_ARRAY 			( 50 ) 
 
 static void prvSetupHardware( void );
 
@@ -26,13 +30,19 @@ static void vGraphTask( void *pvParameters );
 
 static void vStatsTask( void *pvParameters );
 
+int generador_temperatura();
+
+int filtrar(int temps[MAX_ARRAY], int N);
+
+void shift_array(int temps[MAX_ARRAY], int tamanio);
+
 /* The queue used to send strings to the print task for display on the LCD. */
 QueueHandle_t xTempsQueue;
 
 int main(){
 	prvSetupHardware();
 
-	xTempsQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( uint32_t * ) );
+	xTempsQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( int * ) );
 
     /* Start the tasks defined within the file. */
 	xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE, NULL, mainTASK_PRIORITY, NULL );
@@ -60,7 +70,7 @@ static void prvSetupHardware( void )
 
 	/* Set GPIO A0 and A1 as peripheral function.  They are used for input
 	UART signals. */
-	GPIODirModeSet( GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1, GPIO_DIR_MODE_IN );
+	GPIODirModeSet( GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1, GPIO_DIR_MODE_HW );
 
 	/* Configure the UART for 8-N-1 operation. */
 	UARTConfigSet( UART0_BASE, mainBAUD_RATE, UART_CONFIG_WLEN_8 | UART_CONFIG_PAR_NONE | UART_CONFIG_STOP_ONE );
@@ -69,8 +79,8 @@ static void prvSetupHardware( void )
 	as many interrupts as possible. */
 	HWREG( UART0_BASE + UART_O_LCR_H ) &= ~mainFIFO_SET;
 
-	/* Enable Rx interrupts. */
-	HWREG( UART0_BASE + UART_O_IM ) |= UART_INT_RX;
+	/* Enable Tx interrupts. */
+	HWREG( UART0_BASE + UART_O_IM ) |= UART_INT_TX;
 	IntPrioritySet( INT_UART0, configKERNEL_INTERRUPT_PRIORITY );
 	IntEnable( INT_UART0 );
 
@@ -84,7 +94,7 @@ static void prvSetupHardware( void )
 static void vSensorTask( void *pvParameters ){
     TickType_t xLastExecutionTime = xTaskGetTickCount();
 
-    uint32_t temperatura;
+    int temperatura;
 
 	for( ;; )
 	{
@@ -100,7 +110,7 @@ static void vSensorTask( void *pvParameters ){
 }
 
 static void vFilterTask( void *pvParameters ){
-    uint32_t *temp_recibida;
+    int *temp_recibida;
     unsigned portBASE_TYPE uxLine = 0, uxRow = 0;
 
 	for( ;; )
@@ -138,4 +148,27 @@ void vUART_ISR(void){
 		/* receive N */
 		
 	}
+}
+
+// genera una temperatura entre -3 y 42 °C
+int generador_temperatura(){
+    int temperatura = (rand() % 45) - 3;
+    return temperatura;
+}
+
+// hace la media movil simple 
+int filtrar(int temps[MAX_ARRAY], int N){
+    int temperatura = 0;
+    for(int i = 0; i < N; i++){
+        temperatura += temps[i];
+    }
+
+    return temperatura/N;
+}
+
+// mueve los valores del array a la derecha y deja lugar para uno nuevo
+void shift_array(int temps[MAX_ARRAY], int tamanio){
+    for(int i = tamanio - 1; i > 0; i--){
+        temps[i] = temps[i-1];
+    }
 }
