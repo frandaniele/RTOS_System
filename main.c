@@ -8,15 +8,17 @@
 #include "semphr.h"
 
 #include <stdio.h>
-
-/* Demo app includes. */
-#include "integer.h"
-#include "PollQ.h"
-#include "semtest.h"
-#include "BlockQ.h"
+#include <stdlib.h>
+#include <string.h>
 
 /* Delay between cycles of the 'sensor' task. Frequency 10 Hz */
-#define mainSENSOR_DELAY						( ( TickType_t ) 100 / portTICK_PERIOD_MS )
+#define mainSENSOR_DELAY						pdMS_TO_TICKS ( 100 )
+
+/* Delay between cycles of the 'graph' task. Frequency 1 Hz / every 1 sec */
+#define mainGRAPH_DELAY							pdMS_TO_TICKS ( 1000 )
+
+/* Delay between cycles of the 'stats' task. Frequency 0.5 Hz / every 2 sec */
+#define mainSTATS_DELAY							pdMS_TO_TICKS ( 2000 )
 
 /* UART configuration - note this does not use the FIFO so is not very
 efficient. */
@@ -24,16 +26,12 @@ efficient. */
 #define mainFIFO_SET				( 0x10 )
 
 /* Demo task priorities. */
-#define mainQUEUE_POLL_PRIORITY		( tskIDLE_PRIORITY + 2 )
 #define mainCHECK_TASK_PRIORITY		( tskIDLE_PRIORITY + 3 )
-#define mainSEM_TEST_PRIORITY		( tskIDLE_PRIORITY + 1 )
-#define mainBLOCK_Q_PRIORITY		( tskIDLE_PRIORITY + 2 )
 
 /* Misc. */
-#define mainQUEUE_SIZE				( 3 )
-#define mainDEBOUNCE_DELAY			( ( TickType_t ) 150 / portTICK_PERIOD_MS )
+#define mainQUEUE_SIZE				( 1 )
 #define mainNO_DELAY				( ( TickType_t ) 0 )
-#define MAX_ARRAY 			( 50 ) 
+#define MAX_ARRAY 					( 50 ) 
 
 static void prvSetupHardware( void );
 
@@ -45,12 +43,24 @@ static void vGraphTask( void *pvParameters );
 
 static void vStatsTask( void *pvParameters );
 
+static void vUART_NTask( void *pvParameters );
+
 int filtrar(int temps[MAX_ARRAY], int N);
 
-void shift_array(int temps[MAX_ARRAY], int tamanio);
+void shift_array_int(int * temps, int tamanio);
+
+void shift_array_char(char * pixels, int tamanio);
+
+/* The queue used to send measured temperature to filter. */
+QueueHandle_t xTempsQueue;
+
+/* The queue used to send received data from UART to task */
+QueueHandle_t xUARTQueue;
+
+/* The queue used to send the number N to filter */
+QueueHandle_t xNQueue;
 
 /* The queue used to send strings to the print task for display on the LCD. */
-QueueHandle_t xTempsQueue;
 QueueHandle_t xPrintQueue;
 
 /*-----------------------------------------------------------*/
@@ -61,19 +71,34 @@ int main( void )
 	prvSetupHardware();
 
 	xTempsQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( int ) );
-	xPrintQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( int ) );
+	if(xTempsQueue == NULL) return EXIT_FAILURE; 
 
-	/* Start the standard demo tasks. */
-	vStartIntegerMathTasks( tskIDLE_PRIORITY );
-	vStartPolledQueueTasks( mainQUEUE_POLL_PRIORITY );
-	vStartSemaphoreTasks( mainSEM_TEST_PRIORITY );
-	vStartBlockingQueueTasks( mainBLOCK_Q_PRIORITY );
+	xPrintQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( int ) );
+	if(xPrintQueue == NULL) return EXIT_FAILURE; 
+
+	xNQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( int ) );
+	if(xNQueue == NULL) return EXIT_FAILURE; 
+
+	xUARTQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( char ) );
+	if(xUARTQueue == NULL) return EXIT_FAILURE; 
 
     /* Start the tasks defined within the file. */
-	xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL );
-	xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 1, NULL );
-	xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
-	//xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 3, NULL );
+	BaseType_t xReturned;
+
+	xReturned = xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY , NULL );
+	if(xReturned != pdPASS) return EXIT_FAILURE;
+
+	xReturned = xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 1, NULL );
+	if(xReturned != pdPASS) return EXIT_FAILURE;
+
+	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 3, NULL );
+	if(xReturned != pdPASS) return EXIT_FAILURE;
+
+	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
+	if(xReturned != pdPASS) return EXIT_FAILURE;
+
+	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
+	if(xReturned != pdPASS) return EXIT_FAILURE;
 
 	/* Start the scheduler. */
 	vTaskStartScheduler();
@@ -105,11 +130,10 @@ static void prvSetupHardware( void )
 	as many interrupts as possible. */
 	HWREG( UART0_BASE + UART_O_LCR_H ) &= ~mainFIFO_SET;
 
-	/* Enable Tx interrupts. */
-	HWREG( UART0_BASE + UART_O_IM ) |= UART_INT_TX;
+	/* Enable rx interrupts. */
+	HWREG( UART0_BASE + UART_O_IM ) |= UART_INT_RX;
 	IntPrioritySet( INT_UART0, configKERNEL_INTERRUPT_PRIORITY );
 	IntEnable( INT_UART0 );
-
 
 	/* Initialise the LCD> */
     OSRAMInit( false );
@@ -129,7 +153,7 @@ static void vSensorTask( void *pvParameters ){
 		vTaskDelayUntil( &xLastExecutionTime, mainSENSOR_DELAY );
 
 		//envio la medicion
-        xQueueSendToFront( xTempsQueue, &temperatura, 0 );
+        xQueueSend( xTempsQueue, &temperatura, 0 );
         
         temperatura += 3 * op;
 		if(temperatura == 42) op = -1;
@@ -138,7 +162,7 @@ static void vSensorTask( void *pvParameters ){
 }
 
 static void vFilterTask( void *pvParameters ){
-	int temps[MAX_ARRAY] = {20};
+	int temps[MAX_ARRAY] = {0};
     int temp_recibida;
 	int N = 10;
 
@@ -154,34 +178,63 @@ static void vFilterTask( void *pvParameters ){
 		int media_movil = filtrar(temps, N);
 
 		//enviar media movil a print task
-        xQueueSendToFront( xPrintQueue, &media_movil, 0 );
+        xQueueSend( xPrintQueue, &media_movil, 0 );
 
-		shift_array(temps, MAX_ARRAY);
+		shift_array_int(temps, MAX_ARRAY);
 	}
 }
 
 static void vGraphTask( void *pvParameters ){
+    TickType_t xLastExecutionTime = xTaskGetTickCount();
+
 	int temp_recibida;
-    unsigned portBASE_TYPE uxLine = 0, uxRow = 0;
+	//REVISAR TAMANIO SEGUN CUANTOS VALORES PUEDO DIBUJAR
+	unsigned char pixels_to_graph[MAX_ARRAY] = {0};
 	/* Write the message to the LCD. */
 	for( ;; )
 	{
+		vTaskDelayUntil( &xLastExecutionTime, mainGRAPH_DELAY );
+		
 		xQueueReceive( xPrintQueue, &temp_recibida, portMAX_DELAY );
+		pixels_to_graph[0] = temp_recibida;
 
-		uxRow++;
-		uxLine++;
+		//PASAR DE TEMPERATURAS A COORDENADAS PA DIBUJAR
+
 		OSRAMClear();
-		OSRAMStringDraw( "recibi filtracion", uxLine & 0x3f, uxRow & 0x01);
+		OSRAMStringDraw( "recibi filtracion", 0, 0);
+		//OSRAMImageDraw(pixels_to_graph)
+
+		shift_array_char(pixels_to_graph, MAX_ARRAY);
 	}
 }
 
 static void vStatsTask( void *pvParameters ){
+	TickType_t xLastExecutionTime = xTaskGetTickCount();
 
+	for( ;; )
+	{
+		vTaskDelayUntil( &xLastExecutionTime, mainSTATS_DELAY );
+		
+	}
 }
 
-void vUART_ISR(void)
-{
-unsigned long ulStatus;
+static void vUART_NTask( void *pvParameters ){
+
+	for( ;; )
+	{
+		//recibir char por uart isr
+		//chequear char de inicio
+		//chequear final
+		//si se inicio, chequear q sea num y cual y guardarlo
+		//enviaarlo a filter
+
+	}
+}
+
+// REVISAR
+void vUART_ISR(void){
+	unsigned long ulStatus;
+	char charRecibido;
 
 	/* What caused the interrupt. */
 	ulStatus = UARTIntStatus( UART0_BASE, pdTRUE );
@@ -189,18 +242,16 @@ unsigned long ulStatus;
 	/* Clear the interrupt. */
 	UARTIntClear( UART0_BASE, ulStatus );
 
-	/* Was a Tx interrupt pending? */
-	if( ulStatus & UART_INT_TX )
+	/* Was a Rx interrupt pending? */
+	if( ulStatus & UART_INT_RX )
 	{
-		/* Send the next character in the string.  We are not using the FIFO. */
-		/*if( *pcNextChar != 0 )
+		/* Si hay algo lo recibo */
+		if( ( HWREG( UART0_BASE + UART_O_FR ) & UART_FR_RXFF ) )
 		{
-			if( !( HWREG( UART0_BASE + UART_O_FR ) & UART_FR_TXFF ) )
-			{
-				HWREG( UART0_BASE + UART_O_DR ) = *pcNextChar;
-			}
-			pcNextChar++;
-		}*/
+			charRecibido = (char) HWREG( UART0_BASE + UART_O_DR );				
+			
+			xQueueSendFromISR( xUARTQueue, &charRecibido, NULL );
+		}
 	}
 }
 /*-----------------------------------------------------------*/
@@ -216,8 +267,14 @@ int filtrar(int temps[MAX_ARRAY], int N){
 }
 
 // mueve los valores del array a la derecha y deja lugar para uno nuevo
-void shift_array(int temps[MAX_ARRAY], int tamanio){
+void shift_array_int(int * temps, int tamanio){
     for(int i = tamanio - 1; i > 0; i--){
         temps[i] = temps[i-1];
+    }
+}
+
+void shift_array_char(char * pixels, int tamanio){
+    for(int i = tamanio - 1; i > 0; i--){
+        pixels[i] = pixels[i-1];
     }
 }
