@@ -29,6 +29,7 @@ RTOS_SOURCE_DIR=Source
 DEMO_SOURCE_DIR=Common/Minimal
 
 CFLAGS+=-I hw_include -I . -I ${RTOS_SOURCE_DIR}/include -I ${RTOS_SOURCE_DIR}/portable/GCC/ARM_CM3 -I Common/include -D GCC_ARMCM3_LM3S102 -D inline=
+CFLAGS+=-g
 
 VPATH=${RTOS_SOURCE_DIR}:${RTOS_SOURCE_DIR}/portable/MemMang:${RTOS_SOURCE_DIR}/portable/GCC/ARM_CM3:${DEMO_SOURCE_DIR}:init:hw_include
 
@@ -38,10 +39,8 @@ OBJS=${COMPILER}/main.o	\
       ${COMPILER}/tasks.o   \
       ${COMPILER}/port.o    \
       ${COMPILER}/heap_1.o  \
-	  ${COMPILER}/BlockQ.o	\
-	  ${COMPILER}/PollQ.o	\
-	  ${COMPILER}/integer.o	\
 	  ${COMPILER}/semtest.o \
+	  ${COMPILER}/printf-stdarg.o \
 	  ${COMPILER}/osram96x16.o
 
 INIT_OBJS= ${COMPILER}/startup.o

@@ -5,33 +5,35 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-#include "semphr.h"
+//#include "printf-stdarg.h"
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 /* Delay between cycles of the 'sensor' task. Frequency 10 Hz */
-#define mainSENSOR_DELAY						pdMS_TO_TICKS ( 100 )
+#define mainSENSOR_DELAY						( ( TickType_t ) 100 / portTICK_PERIOD_MS )
+
+/* Delay between cycles of the 'filter' task. Frequency 20 Hz */
+#define mainFILTER_DELAY						( ( TickType_t ) 50 / portTICK_PERIOD_MS )
 
 /* Delay between cycles of the 'graph' task. Frequency 1 Hz / every 1 sec */
-#define mainGRAPH_DELAY							pdMS_TO_TICKS ( 1000 )
+#define mainGRAPH_DELAY							( ( TickType_t ) 1000 / portTICK_PERIOD_MS )
 
 /* Delay between cycles of the 'stats' task. Frequency 0.5 Hz / every 2 sec */
-#define mainSTATS_DELAY							pdMS_TO_TICKS ( 2000 )
+#define mainSTATS_DELAY							( ( TickType_t ) 2000 / portTICK_PERIOD_MS )
 
 /* UART configuration - note this does not use the FIFO so is not very
 efficient. */
 #define mainBAUD_RATE				( 19200 )
 #define mainFIFO_SET				( 0x10 )
 
-/* Demo task priorities. */
+/* task priorities. 0 is highest*/
 #define mainCHECK_TASK_PRIORITY		( tskIDLE_PRIORITY + 3 )
 
 /* Misc. */
 #define mainQUEUE_SIZE				( 1 )
 #define mainNO_DELAY				( ( TickType_t ) 0 )
 #define MAX_ARRAY 					( 50 ) 
+#define N_PIXELES 					( 96 ) 
 
 static void prvSetupHardware( void );
 
@@ -50,6 +52,8 @@ int filtrar(int temps[MAX_ARRAY], int N);
 void shift_array_int(int * temps, int tamanio);
 
 void shift_array_char(char * pixels, int tamanio);
+
+unsigned char temp_to_pixel(int temp);
 
 /* The queue used to send measured temperature to filter. */
 QueueHandle_t xTempsQueue;
@@ -85,20 +89,20 @@ int main( void )
     /* Start the tasks defined within the file. */
 	BaseType_t xReturned;
 
-	xReturned = xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY , NULL );
+	xReturned = xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 1, NULL );
+	xReturned = xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 3, NULL );
+	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
-	if(xReturned != pdPASS) return EXIT_FAILURE;
+	//xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
+	//if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
-	if(xReturned != pdPASS) return EXIT_FAILURE;
+	//xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
+	//if(xReturned != pdPASS) return EXIT_FAILURE;
 
 	/* Start the scheduler. */
 	vTaskStartScheduler();
@@ -143,9 +147,12 @@ static void prvSetupHardware( void )
 /*-----------------------------------------------------------*/
 
 static void vSensorTask( void *pvParameters ){
-    TickType_t xLastExecutionTime = xTaskGetTickCount();
+	//volatile UBaseType_t uxHighWaterMark;
+	BaseType_t xReturned;
 
-    int temperatura = 0;
+    TickType_t xLastExecutionTime = xTaskGetTickCount();
+    
+	int temperatura = 0;
 	int op = 1;
 	for( ;; )
 	{
@@ -153,72 +160,100 @@ static void vSensorTask( void *pvParameters ){
 		vTaskDelayUntil( &xLastExecutionTime, mainSENSOR_DELAY );
 
 		//envio la medicion
-        xQueueSend( xTempsQueue, &temperatura, 0 );
-        
-        temperatura += 3 * op;
-		if(temperatura == 42) op = -1;
-		if(temperatura == -6) op = 1;
+        xReturned = xQueueSend( xTempsQueue, &temperatura, 0 );
+		if(xReturned == pdTRUE){
+			temperatura += op;
+			if(temperatura == 36) op = -1;
+			if(temperatura == 4) op = 1;
+		}
+
+    	//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+		//int a = (int) uxHighWaterMark;
     }
 }
 
 static void vFilterTask( void *pvParameters ){
+	//volatile UBaseType_t uxHighWaterMark;
+	
 	int temps[MAX_ARRAY] = {0};
     int temp_recibida;
-	int N = 10;
+	int N = 1;
+	int nuevo_N = 1;
+	BaseType_t xReturned;
+
+	vTaskDelay(mainSENSOR_DELAY);
 
 	for( ;; )
 	{
 		/* Wait for a message to arrive. */
-		xQueueReceive( xTempsQueue, &temp_recibida, portMAX_DELAY );
 
-		temps[0] = temp_recibida;
+		xReturned = xQueueReceive( xTempsQueue, &temp_recibida, mainFILTER_DELAY );
+		if(xReturned == pdTRUE){ //recibi algo
+			temps[0] = temp_recibida;
 
-		//chequear nuevo N
+			//chequear nuevo N
+			xReturned = xQueueReceive( xNQueue, &nuevo_N, 0 );
+			if(xReturned == pdTRUE){
+				N = nuevo_N;
+			}
 
-		int media_movil = filtrar(temps, N);
+			int media_movil = filtrar(temps, N);
 
-		//enviar media movil a print task
-        xQueueSend( xPrintQueue, &media_movil, 0 );
+			//enviar media movil a print task
+			xQueueSend( xPrintQueue, &media_movil, 0 );
 
-		shift_array_int(temps, MAX_ARRAY);
+			shift_array_int(temps, MAX_ARRAY);
+		}
+    	
+		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+		//int a = (int) uxHighWaterMark;
 	}
 }
 
 static void vGraphTask( void *pvParameters ){
-    TickType_t xLastExecutionTime = xTaskGetTickCount();
+    //volatile UBaseType_t uxHighWaterMark;
+	
+	TickType_t xLastExecutionTime = xTaskGetTickCount();
+	BaseType_t xReturned;
 
 	int temp_recibida;
-	//REVISAR TAMANIO SEGUN CUANTOS VALORES PUEDO DIBUJAR
-	unsigned char pixels_to_graph[MAX_ARRAY] = {0};
+	unsigned char pixels_to_graph[N_PIXELES] = {0};
+
 	/* Write the message to the LCD. */
 	for( ;; )
 	{
 		vTaskDelayUntil( &xLastExecutionTime, mainGRAPH_DELAY );
-		
-		xQueueReceive( xPrintQueue, &temp_recibida, portMAX_DELAY );
-		pixels_to_graph[0] = temp_recibida;
 
-		//PASAR DE TEMPERATURAS A COORDENADAS PA DIBUJAR
+		xReturned = xQueueReceive( xPrintQueue, &temp_recibida, portMAX_DELAY );
+		if(xReturned == pdTRUE){
+			pixels_to_graph[0] = temp_to_pixel(temp_recibida);
 
-		OSRAMClear();
-		OSRAMStringDraw( "recibi filtracion", 0, 0);
-		//OSRAMImageDraw(pixels_to_graph)
+			OSRAMClear();
+			OSRAMImageDraw(pixels_to_graph, 0, 0, N_PIXELES, 1);
 
-		shift_array_char(pixels_to_graph, MAX_ARRAY);
+			shift_array_char(pixels_to_graph, N_PIXELES);
+		}
+		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+		//int a = (int) uxHighWaterMark;
 	}
 }
 
 static void vStatsTask( void *pvParameters ){
+	//volatile UBaseType_t uxHighWaterMark;
+	
 	TickType_t xLastExecutionTime = xTaskGetTickCount();
 
 	for( ;; )
 	{
 		vTaskDelayUntil( &xLastExecutionTime, mainSTATS_DELAY );
 		
+    	//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 	}
 }
 
+
 static void vUART_NTask( void *pvParameters ){
+	//volatile UBaseType_t uxHighWaterMark;
 
 	for( ;; )
 	{
@@ -228,10 +263,10 @@ static void vUART_NTask( void *pvParameters ){
 		//si se inicio, chequear q sea num y cual y guardarlo
 		//enviaarlo a filter
 
+    	//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 	}
 }
 
-// REVISAR
 void vUART_ISR(void){
 	unsigned long ulStatus;
 	char charRecibido;
@@ -246,7 +281,7 @@ void vUART_ISR(void){
 	if( ulStatus & UART_INT_RX )
 	{
 		/* Si hay algo lo recibo */
-		if( ( HWREG( UART0_BASE + UART_O_FR ) & UART_FR_RXFF ) )
+		if( ( !HWREG( UART0_BASE + UART_O_FR ) & UART_FR_RXFE ) )
 		{
 			charRecibido = (char) HWREG( UART0_BASE + UART_O_DR );				
 			
@@ -277,4 +312,16 @@ void shift_array_char(char * pixels, int tamanio){
     for(int i = tamanio - 1; i > 0; i--){
         pixels[i] = pixels[i-1];
     }
+}
+
+//mapea los valores de temperatura a pixeles a dibujar segun osram 96x16
+unsigned char temp_to_pixel(int temp){
+    if(temp < 5)        return 128; //0b10000000
+    else if(temp < 10)  return 64;
+    else if(temp < 15)  return 32;
+    else if(temp < 20)  return 16;  
+    else if(temp < 25)  return 8;
+    else if(temp < 30)  return 4;
+    else if(temp < 35)  return 2;
+    else if(temp >= 35) return 1; //0b00000001
 }
