@@ -50,7 +50,7 @@
 #define configTOTAL_HEAP_SIZE		        ( ( size_t ) ( 7000 ) )
 #define configMAX_TASK_NAME_LEN		        ( 10 )
 #define configUSE_TRACE_FACILITY	        1
-//#define configGENERATE_RUN_TIME_STATS	    1
+#define configGENERATE_RUN_TIME_STATS	    1
 #define configUSE_16_BIT_TICKS		        0
 #define configIDLE_SHOULD_YIELD		        0
 #define configUSE_CO_ROUTINES 		        0
@@ -70,13 +70,19 @@ to exclude the API function. */
 #define INCLUDE_vTaskDelay				    1
 #define INCLUDE_uxTaskGetStackHighWaterMark 1
 
-//extern volatile unsigned long ulHighFrequencyTimerTicks;
-//#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() ( ulHighFrequencyTimerTicks = 0UL )
-//#define portGET_RUN_TIME_COUNTER_VALUE()	ulHighFrequencyTimerTicks
+extern volatile unsigned long ulHighFrequencyTimerTicks;
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() ( ulHighFrequencyTimerTicks = 0UL )
+#define portGET_RUN_TIME_COUNTER_VALUE()	ulHighFrequencyTimerTicks
 
 #define configKERNEL_INTERRUPT_PRIORITY 		255
 /* !!!! configMAX_SYSCALL_INTERRUPT_PRIORITY must not be set to zero !!!!
 See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY    191 /* equivalent to 0xa0, or priority 5. */
+
+/* Timer related defines. */
+#define configUSE_TIMERS				0
+#define configTIMER_TASK_PRIORITY		1
+#define configTIMER_QUEUE_LENGTH		10
+#define configTIMER_TASK_STACK_DEPTH	( configMINIMAL_STACK_SIZE )
 
 #endif /* FREERTOS_CONFIG_H */

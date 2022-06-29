@@ -5,11 +5,10 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-//#include "printf-stdarg.h"
+#include "printf-stdarg.h"
 
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 /* Delay between cycles of the 'sensor' task. Frequency 10 Hz */
 #define mainSENSOR_DELAY			( ( TickType_t ) 100 / portTICK_PERIOD_MS )
@@ -42,15 +41,17 @@ efficient. */
 
 static void prvSetupHardware( void );
 
+void vSetupHighFrequencyTimer( void );
+
 static void vSensorTask( void *pvParameters );
 
 static void vFilterTask( void *pvParameters );
 
 static void vGraphTask( void *pvParameters );
 
-static void vStatsTask( void *pvParameters );
-
 static void vUART_NTask( void *pvParameters );
+
+static void vStatsTask( void *pvParameters );
 
 int filtrar(int temps[MAX_ARRAY], int N);
 
@@ -61,6 +62,8 @@ void shiftL_array_char(char * pixels, int tamanio);
 unsigned char temp_to_pixel(int temp);
 
 void print_string(char *str, int len);
+
+char char_estado(eTaskState estado);
 
 /* The queue used to send measured temperature to filter. */
 QueueHandle_t xTempsQueue;
@@ -80,6 +83,9 @@ int main( void )
 {
 	/* Configure the clocks, UART and GPIO. */
 	prvSetupHardware();
+
+	//timer para runtime stats
+	vSetupHighFrequencyTimer();
 
 	xTempsQueue = xQueueCreate( mainQUEUE_SIZE, sizeof( int ) );
 	if(xTempsQueue == NULL) return EXIT_FAILURE; 
@@ -105,10 +111,10 @@ int main( void )
 	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE + 10, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 200, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
 	/* Start the scheduler. */
@@ -252,69 +258,6 @@ static void vGraphTask( void *pvParameters ){
 	}
 }
 
-static void vStatsTask( void *pvParameters ){
-	//volatile UBaseType_t uxHighWaterMark;
-	
-	TickType_t xLastExecutionTime = xTaskGetTickCount();
-
-	TaskStatus_t *status_tasks_array;
-	volatile UBaseType_t tasks_number;
-	unsigned long total_runtime, runtime_porcentaje;
-	signed char *stats_string;
-	const signed char *encabezado = "Tarea\t\tRuntime\t\tRuntime %\t\t";
-
-	for( ;; )
-	{
-		vTaskDelayUntil( &xLastExecutionTime, mainSTATS_DELAY );
-		
-   		*stats_string = 0x00;
-		/* Take a snapshot of the number of tasks in case it changes while this
-		function is executing. */
-		tasks_number = uxTaskGetNumberOfTasks();
-
-		/* Allocate a TaskStatus_t structure for each task.  An array could be
-		allocated statically at compile time. */
-		status_tasks_array = pvPortMalloc( tasks_number * sizeof( TaskStatus_t ) );
-
-		if( status_tasks_array != NULL )	{
-			/* Generate raw status information about each task. */
-			tasks_number = uxTaskGetSystemState( status_tasks_array, tasks_number,	&total_runtime );
-
-			/* For percentage calculations. */
-			total_runtime /= 100UL;
-
-			/* Avoid divide by zero errors. */
-			if( total_runtime > 0 )
-			{
-				/* For each populated position in the pxTaskStatusArray array,
-				format the raw data as human readable ASCII data. */
-				for(int i = 0; i < tasks_number; i++ )
-				{
-					/* What percentage of the total run time has the task used?
-					This will always be rounded down to the nearest integer.
-					ulTotalRunTimeDiv100 has already been divided by 100. */
-					runtime_porcentaje = status_tasks_array[ i ].ulRunTimeCounter / total_runtime;
-
-					sprintf( stats_string, "%stt%lutt%lu%%rn",
-										status_tasks_array[ i ].pcTaskName,
-										status_tasks_array[ i ].ulRunTimeCounter,
-										runtime_porcentaje );
-
-					print_string(stats_string, strlen(stats_string));
-
-					stats_string += strlen( ( char * ) stats_string );
-				}
-			}
-
-			/* The array is no longer needed, free the memory it consumes. */
-			vPortFree( status_tasks_array );
-		}
-
-		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-		//	int a = (int) uxHighWaterMark;
-	}
-}
-
 static void vUART_NTask( void *pvParameters ){
 	//volatile UBaseType_t uxHighWaterMark;
 	BaseType_t xReturned;
@@ -366,6 +309,79 @@ static void vUART_NTask( void *pvParameters ){
 
     //	uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 	//	int a = (int) uxHighWaterMark;
+	}
+}
+
+static void vStatsTask( void *pvParameters ){
+	volatile UBaseType_t uxHighWaterMark;
+	
+	TickType_t xLastExecutionTime = xTaskGetTickCount();
+
+	TaskStatus_t *status_tasks_array;
+	volatile UBaseType_t tasks_number;
+	unsigned long total_runtime, runtime_porcentaje;
+	signed char *stats_string;
+
+	char *encabezado = "Tarea\t\tRuntime\t\tRuntime %\t\tEstado\t\tPrioridad\t\tStack unused";
+	print_string(encabezado, strlen(encabezado));
+
+	for( ;; )
+	{
+		vTaskDelayUntil( &xLastExecutionTime, mainSTATS_DELAY );
+		
+   		*stats_string = 0x00;
+		/* Take a snapshot of the number of tasks in case it changes while this
+		function is executing. */
+		tasks_number = uxTaskGetNumberOfTasks();
+
+		/* Allocate a TaskStatus_t structure for each task.  An array could be
+		allocated statically at compile time. */
+		status_tasks_array = pvPortMalloc( tasks_number * sizeof( TaskStatus_t ) );
+
+		if( status_tasks_array != NULL )	{
+			/* Generate raw status information about each task. */
+			tasks_number = uxTaskGetSystemState( status_tasks_array, tasks_number,	&total_runtime );
+
+			/* For percentage calculations. */
+			total_runtime /= 100UL;
+
+			/* Avoid divide by zero errors. */
+			if( total_runtime > 0 )
+			{
+				stats_string = pvPortMalloc(sizeof(char)*64);
+				/* For each populated position in the pxTaskStatusArray array,
+				format the raw data as human readable ASCII data. */
+				for(int i = 0; i < tasks_number; i++ )
+				{
+					/* What percentage of the total run time has the task used?
+					This will always be rounded down to the nearest integer.
+					ulTotalRunTimeDiv100 has already been divided by 100. */
+					runtime_porcentaje = status_tasks_array[ i ].ulRunTimeCounter / total_runtime;
+
+					sprintf( stats_string, "%s\t\t%d\t\t%d\t\t%c\t\t%d\t\t%d",
+										status_tasks_array[ i ].pcTaskName,
+										status_tasks_array[ i ].ulRunTimeCounter,
+										runtime_porcentaje,
+										char_estado(status_tasks_array[ i ].eCurrentState), 
+										status_tasks_array[ i ].uxCurrentPriority, 
+										status_tasks_array[ i ].usStackHighWaterMark );
+
+					print_string(stats_string, strlen(stats_string));
+				}
+
+				for(int i = 0; i < tasks_number; i++ ){
+					print_string("\033[2A", strlen("\033[2A"));
+				}
+
+				vPortFree( stats_string );
+			}
+
+			/* The array is no longer needed, free the memory it consumes. */
+			vPortFree( status_tasks_array );
+		}
+
+		uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+		int a = (int) uxHighWaterMark;
 	}
 }
 
@@ -430,8 +446,17 @@ unsigned char temp_to_pixel(int temp){
 }
 
 void print_string(char *str, int len){
-	for(int i = 0; i < len; i++) UARTCharPut(UART1_BASE, str[i]);
+	for(int i = 0; i < len; i++) UARTCharPut(UART0_BASE, str[i]);
 
-	UARTCharPut(UART1_BASE, '\n');
-	UARTCharPut(UART1_BASE, '\r');
+	UARTCharPut(UART0_BASE, '\n');
+	UARTCharPut(UART0_BASE, '\r');
+}
+
+char char_estado(eTaskState estado){
+	if(estado == eReady) 			return 'L';
+	else if(estado == eRunning) 	return 'R';
+	else if(estado == eDeleted) 	return 'D';
+	else if(estado == eBlocked) 	return 'B';
+	else if(estado == eSuspended) 	return 'S';
+	else							return 'X';
 }
