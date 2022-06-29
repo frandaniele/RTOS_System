@@ -49,9 +49,9 @@ static void vUART_NTask( void *pvParameters );
 
 int filtrar(int temps[MAX_ARRAY], int N);
 
-void shift_array_int(int * temps, int tamanio);
+void shiftR_array_int(int * temps, int tamanio);
 
-void shift_array_char(char * pixels, int tamanio);
+void shiftL_array_char(char * pixels, int tamanio);
 
 unsigned char temp_to_pixel(int temp);
 
@@ -101,8 +101,8 @@ int main( void )
 	//xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
 	//if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	//xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
-	//if(xReturned != pdPASS) return EXIT_FAILURE;
+	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
+	if(xReturned != pdPASS) return EXIT_FAILURE;
 
 	/* Start the scheduler. */
 	vTaskStartScheduler();
@@ -202,7 +202,7 @@ static void vFilterTask( void *pvParameters ){
 			//enviar media movil a print task
 			xQueueSend( xPrintQueue, &media_movil, 0 );
 
-			shift_array_int(temps, MAX_ARRAY);
+			shiftR_array_int(temps, MAX_ARRAY);
 		}
     	
 		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
@@ -217,6 +217,7 @@ static void vGraphTask( void *pvParameters ){
 	BaseType_t xReturned;
 
 	int temp_recibida;
+	int count = 0;
 	unsigned char pixels_to_graph[N_PIXELES] = {0};
 
 	/* Write the message to the LCD. */
@@ -226,12 +227,19 @@ static void vGraphTask( void *pvParameters ){
 
 		xReturned = xQueueReceive( xPrintQueue, &temp_recibida, portMAX_DELAY );
 		if(xReturned == pdTRUE){
-			pixels_to_graph[0] = temp_to_pixel(temp_recibida);
+			
+			if(count < N_PIXELES - 1) {
+				pixels_to_graph[count] = temp_to_pixel(temp_recibida);
+				count++;
+			}
+			else{
+				pixels_to_graph[N_PIXELES - 1] = temp_to_pixel(temp_recibida);
+				shiftL_array_char(pixels_to_graph, N_PIXELES);
+			}
 
 			OSRAMClear();
 			OSRAMImageDraw(pixels_to_graph, 0, 0, N_PIXELES, 1);
 
-			shift_array_char(pixels_to_graph, N_PIXELES);
 		}
 		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 		//int a = (int) uxHighWaterMark;
@@ -254,9 +262,49 @@ static void vStatsTask( void *pvParameters ){
 
 static void vUART_NTask( void *pvParameters ){
 	//volatile UBaseType_t uxHighWaterMark;
+	BaseType_t xReturned;
+
+	char charRecibido;
+
+	int flag = 0, nuevo_N = 1, digitos = 0, N_a_enviar = 1;
 
 	for( ;; )
 	{
+		xReturned = xQueueReceiveFromISR( xUARTQueue, &charRecibido, NULL );
+		if(xReturned == pdTRUE){
+			if (charRecibido == '<'){//comienzo
+				flag = 1;
+				nuevo_N = 1;
+			} 
+			else if (charRecibido >= '0' && charRecibido <= '9' && flag){//recibo 2 digitos
+				digitos++;
+				if (digitos == 1) 		nuevo_N += (int) (charRecibido - 0x30)*10;
+				else if (digitos == 2) 	nuevo_N += (int) (charRecibido - 0x30);
+				else if (digitos > 2){
+					digitos = 0;
+					flag = 0;
+				}
+			}
+			else if (charRecibido == '>' && flag){//final
+                if(digitos == 1) {	        
+                    N_a_enviar = N_a_enviar;
+                    }
+                else{
+                    if(nuevo_N <= 1) 				N_a_enviar = 1;
+                    else if(nuevo_N >= MAX_ARRAY) 	N_a_enviar = MAX_ARRAY - 1;
+    				else 							N_a_enviar = nuevo_N - 1; //xq inicia en 1
+
+					xQueueSend( xNQueue, &N_a_enviar, 0 );
+                }
+
+				flag = 0;
+				digitos = 0;
+			}
+			else{//otra cosa, empiezo secuencia de nuevo
+				flag = 0;
+				digitos = 0;
+			}
+		}
 		//recibir char por uart isr
 		//chequear char de inicio
 		//chequear final
@@ -281,7 +329,7 @@ void vUART_ISR(void){
 	if( ulStatus & UART_INT_RX )
 	{
 		/* Si hay algo lo recibo */
-		if( ( !HWREG( UART0_BASE + UART_O_FR ) & UART_FR_RXFE ) )
+		if( ( HWREG( UART0_BASE + UART_O_FR ) & UART_FR_RXFF ) )
 		{
 			charRecibido = (char) HWREG( UART0_BASE + UART_O_DR );				
 			
@@ -301,16 +349,17 @@ int filtrar(int temps[MAX_ARRAY], int N){
     return temperatura/N;
 }
 
-// mueve los valores del array a la derecha y deja lugar para uno nuevo
-void shift_array_int(int * temps, int tamanio){
+// mueve los valores del array a la derecha y deja lugar para uno nuevo al inicio
+void shiftR_array_int(int * temps, int tamanio){
     for(int i = tamanio - 1; i > 0; i--){
         temps[i] = temps[i-1];
     }
 }
 
-void shift_array_char(char * pixels, int tamanio){
-    for(int i = tamanio - 1; i > 0; i--){
-        pixels[i] = pixels[i-1];
+// mueve los valores del array a la izquierda y deja lugar para uno nuevo al final
+void shiftL_array_char(char * pixels, int tamanio){
+    for(int i = 0; i < tamanio - 1; i++){
+        pixels[i] = pixels[i+1];
     }
 }
 
