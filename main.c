@@ -8,18 +8,23 @@
 //#include "printf-stdarg.h"
 
 #include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 /* Delay between cycles of the 'sensor' task. Frequency 10 Hz */
-#define mainSENSOR_DELAY						( ( TickType_t ) 100 / portTICK_PERIOD_MS )
+#define mainSENSOR_DELAY			( ( TickType_t ) 100 / portTICK_PERIOD_MS )
 
 /* Delay between cycles of the 'filter' task. Frequency 20 Hz */
-#define mainFILTER_DELAY						( ( TickType_t ) 50 / portTICK_PERIOD_MS )
+#define mainFILTER_DELAY			( ( TickType_t ) 50 / portTICK_PERIOD_MS )
 
 /* Delay between cycles of the 'graph' task. Frequency 1 Hz / every 1 sec */
-#define mainGRAPH_DELAY							( ( TickType_t ) 1000 / portTICK_PERIOD_MS )
+#define mainGRAPH_DELAY				( ( TickType_t ) 1000 / portTICK_PERIOD_MS )
 
 /* Delay between cycles of the 'stats' task. Frequency 0.5 Hz / every 2 sec */
-#define mainSTATS_DELAY							( ( TickType_t ) 2000 / portTICK_PERIOD_MS )
+#define mainSTATS_DELAY				( ( TickType_t ) 2000 / portTICK_PERIOD_MS )
+
+/* Delay between cycles of the 'uart_n' task. Frequency 12.5 Hz */
+#define mainUART_N_DELAY			( ( TickType_t ) 80 / portTICK_PERIOD_MS )
 
 /* UART configuration - note this does not use the FIFO so is not very
 efficient. */
@@ -55,6 +60,8 @@ void shiftL_array_char(char * pixels, int tamanio);
 
 unsigned char temp_to_pixel(int temp);
 
+void print_string(char *str, int len);
+
 /* The queue used to send measured temperature to filter. */
 QueueHandle_t xTempsQueue;
 
@@ -89,19 +96,19 @@ int main( void )
     /* Start the tasks defined within the file. */
 	BaseType_t xReturned;
 
-	xReturned = xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE + 40, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE + 10, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	//xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
-	//if(xReturned != pdPASS) return EXIT_FAILURE;
+	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE + 100, NULL, mainCHECK_TASK_PRIORITY - 2, NULL );
+	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
 	/* Start the scheduler. */
@@ -211,7 +218,7 @@ static void vFilterTask( void *pvParameters ){
 }
 
 static void vGraphTask( void *pvParameters ){
-    //volatile UBaseType_t uxHighWaterMark;
+  //  volatile UBaseType_t uxHighWaterMark;
 	
 	TickType_t xLastExecutionTime = xTaskGetTickCount();
 	BaseType_t xReturned;
@@ -224,7 +231,6 @@ static void vGraphTask( void *pvParameters ){
 	for( ;; )
 	{
 		vTaskDelayUntil( &xLastExecutionTime, mainGRAPH_DELAY );
-
 		xReturned = xQueueReceive( xPrintQueue, &temp_recibida, portMAX_DELAY );
 		if(xReturned == pdTRUE){
 			
@@ -241,7 +247,7 @@ static void vGraphTask( void *pvParameters ){
 			OSRAMImageDraw(pixels_to_graph, 0, 0, N_PIXELES, 1);
 
 		}
-		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+	//	uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 		//int a = (int) uxHighWaterMark;
 	}
 }
@@ -251,14 +257,63 @@ static void vStatsTask( void *pvParameters ){
 	
 	TickType_t xLastExecutionTime = xTaskGetTickCount();
 
+	TaskStatus_t *status_tasks_array;
+	volatile UBaseType_t tasks_number;
+	unsigned long total_runtime, runtime_porcentaje;
+	signed char *stats_string;
+	const signed char *encabezado = "Tarea\t\tRuntime\t\tRuntime %\t\t";
+
 	for( ;; )
 	{
 		vTaskDelayUntil( &xLastExecutionTime, mainSTATS_DELAY );
 		
-    	//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+   		*stats_string = 0x00;
+		/* Take a snapshot of the number of tasks in case it changes while this
+		function is executing. */
+		tasks_number = uxTaskGetNumberOfTasks();
+
+		/* Allocate a TaskStatus_t structure for each task.  An array could be
+		allocated statically at compile time. */
+		status_tasks_array = pvPortMalloc( tasks_number * sizeof( TaskStatus_t ) );
+
+		if( status_tasks_array != NULL )	{
+			/* Generate raw status information about each task. */
+			tasks_number = uxTaskGetSystemState( status_tasks_array, tasks_number,	&total_runtime );
+
+			/* For percentage calculations. */
+			total_runtime /= 100UL;
+
+			/* Avoid divide by zero errors. */
+			if( total_runtime > 0 )
+			{
+				/* For each populated position in the pxTaskStatusArray array,
+				format the raw data as human readable ASCII data. */
+				for(int i = 0; i < tasks_number; i++ )
+				{
+					/* What percentage of the total run time has the task used?
+					This will always be rounded down to the nearest integer.
+					ulTotalRunTimeDiv100 has already been divided by 100. */
+					runtime_porcentaje = status_tasks_array[ i ].ulRunTimeCounter / total_runtime;
+
+					sprintf( stats_string, "%stt%lutt%lu%%rn",
+										status_tasks_array[ i ].pcTaskName,
+										status_tasks_array[ i ].ulRunTimeCounter,
+										runtime_porcentaje );
+
+					print_string(stats_string, strlen(stats_string));
+
+					stats_string += strlen( ( char * ) stats_string );
+				}
+			}
+
+			/* The array is no longer needed, free the memory it consumes. */
+			vPortFree( status_tasks_array );
+		}
+
+		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+		//	int a = (int) uxHighWaterMark;
 	}
 }
-
 
 static void vUART_NTask( void *pvParameters ){
 	//volatile UBaseType_t uxHighWaterMark;
@@ -305,13 +360,12 @@ static void vUART_NTask( void *pvParameters ){
 				digitos = 0;
 			}
 		}
-		//recibir char por uart isr
-		//chequear char de inicio
-		//chequear final
-		//si se inicio, chequear q sea num y cual y guardarlo
-		//enviaarlo a filter
+		else{
+			vTaskDelay(mainUART_N_DELAY);
+		}
 
-    	//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    //	uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+	//	int a = (int) uxHighWaterMark;
 	}
 }
 
@@ -373,4 +427,11 @@ unsigned char temp_to_pixel(int temp){
     else if(temp < 30)  return 4;
     else if(temp < 35)  return 2;
     else if(temp >= 35) return 1; //0b00000001
+}
+
+void print_string(char *str, int len){
+	for(int i = 0; i < len; i++) UARTCharPut(UART1_BASE, str[i]);
+
+	UARTCharPut(UART1_BASE, '\n');
+	UARTCharPut(UART1_BASE, '\r');
 }
