@@ -31,7 +31,7 @@ efficient. */
 #define mainFIFO_SET				( 0x10 )
 
 /* task priorities. 0 is highest*/
-#define mainCHECK_TASK_PRIORITY		( tskIDLE_PRIORITY + 3 )
+#define mainTASK_PRIORITY			( tskIDLE_PRIORITY + 3 )
 
 /* Misc. */
 #define mainQUEUE_SIZE				( 1 )
@@ -102,19 +102,19 @@ int main( void )
     /* Start the tasks defined within the file. */
 	BaseType_t xReturned;
 
-	xReturned = xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vSensorTask, "Sensor", configMINIMAL_STACK_SIZE, NULL, mainTASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE + 40, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vFilterTask, "Filter", configMINIMAL_STACK_SIZE + 40, NULL, mainTASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE + 10, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vGraphTask, "Graph", configMINIMAL_STACK_SIZE, NULL, mainTASK_PRIORITY + 1, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainTASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 200, NULL, mainCHECK_TASK_PRIORITY, NULL );
+	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 25, NULL, mainTASK_PRIORITY + 2, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
 	/* Start the scheduler. */
@@ -313,23 +313,24 @@ static void vUART_NTask( void *pvParameters ){
 }
 
 static void vStatsTask( void *pvParameters ){
-	volatile UBaseType_t uxHighWaterMark;
+	//volatile UBaseType_t uxHighWaterMark;
 	
 	TickType_t xLastExecutionTime = xTaskGetTickCount();
 
 	TaskStatus_t *status_tasks_array;
 	volatile UBaseType_t tasks_number;
 	unsigned long total_runtime, runtime_porcentaje;
-	signed char *stats_string;
+	char stats_string[80] = {0};
 
-	char *encabezado = "Tarea\t\tRuntime\t\tRuntime %\t\tEstado\t\tPrioridad\t\tStack unused";
-	print_string(encabezado, strlen(encabezado));
-
+	char *encabezado = "Tarea\t\tRuntime\t\tRuntime %\tEstado\t\tPrioridad\tStack Free";
+	char *separador = "\n------------------------------------------------------------------------------------------\n";
+	
 	for( ;; )
 	{
 		vTaskDelayUntil( &xLastExecutionTime, mainSTATS_DELAY );
 		
-   		*stats_string = 0x00;
+		print_string(encabezado, strlen(encabezado));
+		
 		/* Take a snapshot of the number of tasks in case it changes while this
 		function is executing. */
 		tasks_number = uxTaskGetNumberOfTasks();
@@ -338,7 +339,7 @@ static void vStatsTask( void *pvParameters ){
 		allocated statically at compile time. */
 		status_tasks_array = pvPortMalloc( tasks_number * sizeof( TaskStatus_t ) );
 
-		if( status_tasks_array != NULL )	{
+		if( status_tasks_array != NULL ){
 			/* Generate raw status information about each task. */
 			tasks_number = uxTaskGetSystemState( status_tasks_array, tasks_number,	&total_runtime );
 
@@ -348,7 +349,6 @@ static void vStatsTask( void *pvParameters ){
 			/* Avoid divide by zero errors. */
 			if( total_runtime > 0 )
 			{
-				stats_string = pvPortMalloc(sizeof(char)*64);
 				/* For each populated position in the pxTaskStatusArray array,
 				format the raw data as human readable ASCII data. */
 				for(int i = 0; i < tasks_number; i++ )
@@ -369,19 +369,15 @@ static void vStatsTask( void *pvParameters ){
 					print_string(stats_string, strlen(stats_string));
 				}
 
-				for(int i = 0; i < tasks_number; i++ ){
-					print_string("\033[2A", strlen("\033[2A"));
-				}
-
-				vPortFree( stats_string );
+				print_string(separador, strlen(separador));
 			}
 
-			/* The array is no longer needed, free the memory it consumes. */
-			vPortFree( status_tasks_array );
 		}
+		/* The array is no longer needed, free the memory it consumes. */
+		vPortFree( status_tasks_array );
 
-		uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-		int a = (int) uxHighWaterMark;
+		//uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+		//int a = (int) uxHighWaterMark;
 	}
 }
 

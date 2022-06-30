@@ -39,7 +39,7 @@ OBJS=${COMPILER}/main.o	\
       ${COMPILER}/queue.o   \
       ${COMPILER}/tasks.o   \
       ${COMPILER}/port.o    \
-      ${COMPILER}/heap_1.o  \
+      ${COMPILER}/heap_4.o  \
 	  ${COMPILER}/semtest.o \
 	  ${COMPILER}/printf-stdarg.o \
 	  ${COMPILER}/timer.o \
