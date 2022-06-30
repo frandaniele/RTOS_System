@@ -114,7 +114,7 @@ int main( void )
 	xReturned = xTaskCreate( vUART_NTask, "UART_N", configMINIMAL_STACK_SIZE, NULL, mainTASK_PRIORITY, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
-	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 25, NULL, mainTASK_PRIORITY + 2, NULL );
+	xReturned = xTaskCreate( vStatsTask, "Stats", configMINIMAL_STACK_SIZE + 30, NULL, mainTASK_PRIORITY + 2, NULL );
 	if(xReturned != pdPASS) return EXIT_FAILURE;
 
 	/* Start the scheduler. */

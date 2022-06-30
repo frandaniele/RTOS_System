@@ -40,7 +40,6 @@ OBJS=${COMPILER}/main.o	\
       ${COMPILER}/tasks.o   \
       ${COMPILER}/port.o    \
       ${COMPILER}/heap_4.o  \
-	  ${COMPILER}/semtest.o \
 	  ${COMPILER}/printf-stdarg.o \
 	  ${COMPILER}/timer.o \
 	  ${COMPILER}/osram96x16.o
